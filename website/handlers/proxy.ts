@@ -1,9 +1,10 @@
 import { DecoSiteState } from "deco/mod.ts";
-import { Handler } from "std/http/mod.ts";
 import { proxySetCookie } from "../../utils/cookie.ts";
+import { removeDirtyCookies as removeDirtyCookiesFn } from "../../utils/normalize.ts";
 import { Script } from "../types.ts";
 import { isFreshCtx } from "./fresh.ts";
 
+type Handler = Deno.ServeHandler;
 const HOP_BY_HOP = [
   "Keep-Alive",
   "Transfer-Encoding",
@@ -18,7 +19,7 @@ const HOP_BY_HOP = [
 const noTrailingSlashes = (str: string) =>
   str.at(-1) === "/" ? str.slice(0, -1) : str;
 const sanitize = (str: string) => str.startsWith("/") ? str : `/${str}`;
-const removeCFHeaders = (headers: Headers) => {
+export const removeCFHeaders = (headers: Headers) => {
   headers.forEach((_value, key) => {
     if (key.startsWith("cf-")) {
       headers.delete(key);
@@ -65,6 +66,7 @@ export interface Props {
    * @description custom headers
    */
   customHeaders?: Header[];
+
   /**
    * @description Scripts to be included in the head of the html
    */
@@ -81,6 +83,13 @@ export interface Props {
   avoidAppendPath?: boolean;
 
   replaces?: TextReplace[];
+
+  /**
+   * @description remove cookies that have non-ASCII characters and some symbols
+   * @default false
+   */
+  removeDirtyCookies?: boolean;
+  excludeHeaders?: string[];
 }
 
 /**
@@ -92,10 +101,12 @@ export default function Proxy({
   basePath,
   host: hostToUse,
   customHeaders = [],
+  excludeHeaders = [],
   includeScriptsToHead,
-  redirect = "manual",
   avoidAppendPath,
+  redirect = "manual",
   replaces,
+  removeDirtyCookies = false,
 }: Props): Handler {
   return async (req, _ctx) => {
     const url = new URL(req.url);
@@ -116,6 +127,10 @@ export default function Proxy({
       _ctx?.state?.monitoring?.logger?.log?.("proxy received headers", headers);
     }
     removeCFHeaders(headers); // cf-headers are not ASCII-compliant
+    if (removeDirtyCookies) {
+      removeDirtyCookiesFn(headers);
+    }
+
     if (isFreshCtx<DecoSiteState>(_ctx)) {
       _ctx?.state?.monitoring?.logger?.log?.("proxy sent headers", headers);
     }
@@ -135,6 +150,10 @@ export default function Proxy({
       } else {
         headers.set(key, value);
       }
+    }
+
+    for (const key of excludeHeaders) {
+      headers.delete(key);
     }
 
     const response = await fetch(to, {
